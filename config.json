@@ -1,0 +1,16 @@
+{
+  "scan_interval_seconds": 300,
+  "cooldown_minutes": 60,
+  "min_confidence": 60,
+  "risk_reward_min": 1.8,
+  "telegram": {
+    "enabled": true,
+    "bot_token": "${{ secrets.TELEGRAM_BOT_TOKEN }}",
+    "chat_id": "${{ secrets.TELEGRAM_CHAT_ID }}"
+  },
+  "watchlists": {
+    "intraday": ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "TSLA", "META", "AMZN", "EURUSD=X", "GBPUSD=X", "BTC-USD", "ETH-USD"],
+    "swing": ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "TSLA", "META", "AMZN", "GLD", "SLV", "BTC-USD", "ETH-USD"],
+    "position": ["SPY", "QQQ", "AAPL", "MSFT", "NVDA", "TSLA", "META", "AMZN", "GLD", "SLV", "BTC-USD", "ETH-USD"]
+  }
+}
