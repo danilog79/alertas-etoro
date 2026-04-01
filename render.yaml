@@ -1,0 +1,7 @@
+services:
+  - type: cron
+    name: alertas-etoro
+    runtime: python
+    schedule: "*/5 * * * *"
+    buildCommand: "pip install -r requirements_alert_system.txt"
+    startCommand: "python alert_system_smart_heartbeat.py --once"
