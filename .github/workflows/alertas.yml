@@ -40,8 +40,7 @@ jobs:
               "position": ["AAPL", "MSFT", "SPY", "QQQ", "AMZN", "GLD", "BTC-USD"]
             }
           }
-  - name: Ejecutar scanner
-  run: python alert_system_github_ready.py --once      
-  EOF
+          EOF
 
-
+      - name: Ejecutar scanner
+        run: python alert_system_github_ready.py --once
