@@ -27,8 +27,8 @@ jobs:
           {
             "scan_interval_seconds": 300,
             "cooldown_minutes": 60,
-            "min_confidence": 60,
-            "risk_reward_min": 1.8,
+            "min_confidence": 65,
+            "risk_reward_min": 2.0,
             "telegram": {
               "enabled": true,
               "bot_token": "${{ secrets.TELEGRAM_BOT_TOKEN }}",
@@ -38,9 +38,28 @@ jobs:
               "intraday": ["AAPL", "NVDA", "TSLA", "SPY", "QQQ", "AMZN", "EURUSD=X", "BTC-USD"],
               "swing": ["AAPL", "NVDA", "SPY", "QQQ", "AMZN", "GLD", "BTC-USD"],
               "position": ["AAPL", "MSFT", "SPY", "QQQ", "AMZN", "GLD", "BTC-USD"]
+            },
+            "intraday_filter": {
+              "enabled": true,
+              "min_atr_pct": 0.35,
+              "max_distance_from_ema20_pct": 1.2,
+              "max_distance_from_vwap_pct": 1.0,
+              "avoid_first_minutes": 5,
+              "us_session": {
+                "start_utc": "13:35",
+                "end_utc": "20:00"
+              },
+              "forex_session": {
+                "start_utc": "06:00",
+                "end_utc": "20:00"
+              },
+              "crypto_session": {
+                "start_utc": "00:00",
+                "end_utc": "23:59"
+              }
             }
           }
           EOF
 
       - name: Ejecutar scanner
-        run: python alert_system_github_ready.py --once
+        run: python alert_system_intraday_optimized.py --once
