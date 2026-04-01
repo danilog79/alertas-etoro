@@ -3,6 +3,7 @@ import math
 import os
 import time
 import traceback
+import argparse
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
@@ -12,9 +13,6 @@ import requests
 import yfinance as yf
 
 
-# -----------------------------
-# Config loading
-# -----------------------------
 DEFAULT_CONFIG = {
     "scan_interval_seconds": 300,
     "cooldown_minutes": 60,
@@ -49,9 +47,6 @@ def load_config(path: str = "config.json") -> Dict:
     return DEFAULT_CONFIG
 
 
-# -----------------------------
-# Indicator functions
-# -----------------------------
 def ema(series: pd.Series, span: int) -> pd.Series:
     return series.ewm(span=span, adjust=False).mean()
 
@@ -95,9 +90,6 @@ def vwap(df: pd.DataFrame) -> pd.Series:
     return (cum_tpv / cum_vol).fillna(df["Close"])
 
 
-# -----------------------------
-# Data access
-# -----------------------------
 def download_ohlcv(symbol: str, interval: str, period: str) -> Optional[pd.DataFrame]:
     try:
         df = yf.download(
@@ -127,9 +119,6 @@ def download_ohlcv(symbol: str, interval: str, period: str) -> Optional[pd.DataF
         return None
 
 
-# -----------------------------
-# Signal definitions
-# -----------------------------
 @dataclass
 class Signal:
     symbol: str
@@ -161,10 +150,7 @@ class SignalEngine:
         out["atr14"] = atr(out, 14)
         out["vol_ma20"] = out["Volume"].rolling(20).mean().replace(0, math.nan)
         out["rel_vol"] = (out["Volume"] / out["vol_ma20"]).replace([math.inf, -math.inf], math.nan).fillna(1)
-        if intraday:
-            out["vwap"] = vwap(out)
-        else:
-            out["vwap"] = out["Close"]
+        out["vwap"] = vwap(out) if intraday else out["Close"]
         out["daily_pct"] = out["Close"].pct_change() * 100
         return out.dropna()
 
@@ -176,7 +162,6 @@ class SignalEngine:
         prev = df.iloc[-2]
         signals = []
 
-        # Long pullback continuation
         reasons = []
         confidence = 0
         if row["ema20"] > row["ema50"] > row["ema200"]:
@@ -198,7 +183,6 @@ class SignalEngine:
         if confidence >= self.min_confidence and rr >= self.rr_min:
             signals.append(Signal(symbol, "continuación intradía", "LONG", "15m", entry, entry, stop, target, rr, confidence, reasons, datetime.now(timezone.utc).isoformat()))
 
-        # Short breakdown continuation
         reasons = []
         confidence = 0
         if row["ema20"] < row["ema50"] < row["ema200"]:
@@ -220,7 +204,6 @@ class SignalEngine:
         if confidence >= self.min_confidence and rr >= self.rr_min:
             signals.append(Signal(symbol, "continuación intradía", "SHORT", "15m", entry, entry, stop, target, rr, confidence, reasons, datetime.now(timezone.utc).isoformat()))
 
-        # Spike / dip detector for opportunistic alerts
         signals.extend(self._evaluate_spike(symbol, df, timeframe="15m"))
         return signals
 
@@ -234,7 +217,6 @@ class SignalEngine:
         lows20 = df["Low"].rolling(20).min()
         signals = []
 
-        # Breakout long
         reasons = []
         confidence = 0
         if row["ema20"] > row["ema50"]:
@@ -254,7 +236,6 @@ class SignalEngine:
         if confidence >= self.min_confidence and rr >= self.rr_min:
             signals.append(Signal(symbol, "breakout intrasemana", "LONG", "1h", entry, entry, stop, target, rr, confidence, reasons, datetime.now(timezone.utc).isoformat()))
 
-        # Breakdown short
         reasons = []
         confidence = 0
         if row["ema20"] < row["ema50"]:
@@ -335,7 +316,6 @@ class SignalEngine:
         move_pct = ((row["Close"] / prev["Close"]) - 1) * 100
         atr_pct = (row["atr14"] / row["Close"]) * 100 if row["Close"] else 0
 
-        # Oversold bounce candidate
         reasons = []
         confidence = 0
         if move_pct <= -max(2.5, 1.5 * atr_pct):
@@ -354,7 +334,6 @@ class SignalEngine:
             if rr >= self.rr_min:
                 signals.append(Signal(symbol, "caída brusca: posible rebote", "LONG", timeframe, entry, entry, stop, target, rr, confidence, reasons, datetime.now(timezone.utc).isoformat()))
 
-        # Overextended momentum / breakout
         reasons = []
         confidence = 0
         if move_pct >= max(2.5, 1.5 * atr_pct):
@@ -375,9 +354,6 @@ class SignalEngine:
         return signals
 
 
-# -----------------------------
-# Alert delivery / persistence
-# -----------------------------
 def signal_key(sig: Signal) -> str:
     return f"{sig.symbol}|{sig.strategy}|{sig.side}|{sig.timeframe}"
 
@@ -440,9 +416,6 @@ class AlertManager:
         )
 
 
-# -----------------------------
-# Scanner orchestration
-# -----------------------------
 class Scanner:
     def __init__(self, config: Dict):
         self.config = config
@@ -467,7 +440,6 @@ class Scanner:
             if df is not None:
                 all_signals.extend(self.engine.evaluate_position(symbol, df))
 
-        # sort by confidence then RR
         all_signals.sort(key=lambda s: (s.confidence, s.risk_reward), reverse=True)
         sent = 0
         for sig in all_signals:
@@ -481,20 +453,43 @@ class Scanner:
 
     def run_forever(self):
         interval = int(self.config["scan_interval_seconds"])
-        print(f"Iniciando scanner. Intervalo: {interval} s")
+        print(f"Iniciando scanner continuo. Intervalo: {interval} s")
         while True:
             try:
                 self.scan_once()
             except KeyboardInterrupt:
                 print("Detenido por el usuario.")
                 break
-            except Exception as e:
+            except Exception:
                 print("Error en el escaneo:")
                 traceback.print_exc()
             time.sleep(interval)
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Scanner de alertas de mercado")
+    parser.add_argument("--once", action="store_true", help="Ejecuta un solo escaneo y termina")
+    parser.add_argument("--config", default="config.json", help="Ruta del archivo de configuración")
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    config = load_config()
+    args = parse_args()
+    config = load_config(args.config)
     scanner = Scanner(config)
-    scanner.run_forever()
+
+    github_actions = os.getenv("GITHUB_ACTIONS", "").lower() == "true"
+    run_once = args.once or github_actions
+
+    try:
+        if run_once:
+            print("Iniciando scanner en modo una sola ejecución.")
+            scanner.scan_once()
+        else:
+            scanner.run_forever()
+    except KeyboardInterrupt:
+        print("Detenido por el usuario.")
+    except Exception:
+        print("Error en la ejecución:")
+        traceback.print_exc()
+        raise
