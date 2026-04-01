@@ -1,0 +1,46 @@
+name: Alertas eToro
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  run-alerts:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Instalar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install -r requirements_alert_system.txt
+
+      - name: Crear config.json
+        run: |
+          cat > config.json << 'EOF'
+          {
+            "scan_interval_seconds": 300,
+            "cooldown_minutes": 60,
+            "min_confidence": 60,
+            "risk_reward_min": 1.8,
+            "telegram": {
+              "enabled": true,
+              "bot_token": "${{ secrets.TELEGRAM_BOT_TOKEN }}",
+              "chat_id": "${{ secrets.TELEGRAM_CHAT_ID }}"
+            },
+            "watchlists": {
+              "intraday": ["AAPL", "NVDA", "TSLA", "SPY", "QQQ", "AMZN", "EURUSD=X", "BTC-USD"],
+              "swing": ["AAPL", "NVDA", "SPY", "QQQ", "AMZN", "GLD", "BTC-USD"],
+              "position": ["AAPL", "MSFT", "SPY", "QQQ", "AMZN", "GLD", "BTC-USD"]
+            }
+          }
+          EOF
+
+      - name: Ejecutar scanner
+        run: python alert_system_github_ready.py --once
