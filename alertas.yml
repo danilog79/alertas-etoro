@@ -57,9 +57,16 @@ jobs:
                 "start_utc": "00:00",
                 "end_utc": "23:59"
               }
+            },
+            "heartbeat": {
+              "enabled": true,
+              "interval_minutes": 60,
+              "include_market_summary": true,
+              "include_top_candidates": true,
+              "top_n": 5
             }
           }
           EOF
 
       - name: Ejecutar scanner
-        run: python alert_system_intraday_optimized.py --once
+        run: python alert_system_smart_heartbeat.py --once
