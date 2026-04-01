@@ -42,5 +42,5 @@ jobs:
           }
           EOF
 
-      - name: Ejecutar scanner
-        run: python alert_system.py
+- name: Ejecutar scanner
+  run: python alert_system_github_ready.py --once
