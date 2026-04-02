@@ -1,0 +1,56 @@
+{
+  "scan_interval_seconds": 300,
+  "cooldown_minutes": 60,
+  "min_confidence": 70,
+  "risk_reward_min": 2.0,
+  "telegram": {
+    "enabled": true,
+    "bot_token": "TU_TOKEN",
+    "chat_id": "TU_CHAT_ID"
+  },
+  "heartbeat": {
+    "enabled": true,
+    "interval_minutes": 60,
+    "send_only_when_no_signals": false
+  },
+  "intraday_filter": {
+    "enabled": true,
+    "min_atr_pct": 0.35,
+    "max_distance_from_ema20_pct": 1.2,
+    "max_distance_from_vwap_pct": 1.0,
+    "max_trigger_candle_atr_multiple": 0.8,
+    "us_session": {"start_utc": "13:35", "end_utc": "20:00"},
+    "forex_session": {"start_utc": "06:00", "end_utc": "20:00"},
+    "crypto_session": {"start_utc": "00:00", "end_utc": "23:59"}
+  },
+  "etoro_featured": {
+    "enabled": true,
+    "winners": ["GLD", "ARKK", "VXUS", "USDJPY=X"],
+    "losers": ["LINK-USD", "ETH-USD", "ADA-USD", "SOL-USD", "XLE"],
+    "score_boost": 10
+  },
+  "watchlists": {
+    "intraday": [
+      "SPY", "QQQ", "DIA", "IWM", "VTI", "GLD", "SLV", "ARKK", "VXUS", "XLE", "XLF", "XLK",
+      "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "NFLX", "AMD", "COIN",
+      "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X",
+      "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "LINK-USD"
+    ],
+    "swing": [
+      "SPY", "QQQ", "DIA", "IWM", "VTI", "GLD", "SLV", "ARKK", "VXUS", "XLE", "XLF", "XLK",
+      "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "NFLX", "AMD", "COIN",
+      "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X",
+      "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "LINK-USD"
+    ],
+    "position": [
+      "SPY", "QQQ", "DIA", "IWM", "VTI", "GLD", "SLV", "ARKK", "VXUS", "XLE", "XLF", "XLK",
+      "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "NFLX", "AMD", "COIN",
+      "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "LINK-USD"
+    ]
+  },
+  "benchmarks": {
+    "us": ["SPY", "QQQ"],
+    "crypto": ["BTC-USD", "ETH-USD"],
+    "forex": ["USDJPY=X", "EURUSD=X"]
+  }
+}
