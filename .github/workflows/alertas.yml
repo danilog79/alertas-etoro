@@ -4,6 +4,15 @@ on:
   schedule:
     - cron: "3,13,23,33,43,53 * * * *"
   workflow_dispatch:
+      inputs:
+      trigger_source:
+        description: "Origen del disparo"
+        required: false
+        default: "manual"
+      reason:
+        description: "Motivo de la ejecución"
+        required: false
+        default: "manual_run"
 
 jobs:
   run-alerts:
