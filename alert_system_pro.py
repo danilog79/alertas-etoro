@@ -7,7 +7,7 @@ import time
 import traceback
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone, timedelta
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
 import pandas as pd
 import requests
@@ -16,9 +16,12 @@ import yfinance as yf
 DEFAULT_CONFIG = {
     "scan_interval_seconds": 300,
     "cooldown_minutes": 60,
-    "min_confidence": 70,
-    "risk_reward_min": 2.0,
+    "min_confidence": 58,
+    "risk_reward_min": 1.3,
     "top_candidates_in_heartbeat": 5,
+    "always_send_top_opportunities": True,
+    "top_intraday_to_send": 3,
+    "top_swing_to_send": 3,
     "heartbeat": {
         "enabled": True,
         "interval_minutes": 60,
@@ -27,6 +30,11 @@ DEFAULT_CONFIG = {
         "enabled": False,
         "bot_token": "",
         "chat_id": "",
+    },
+    "risk_management": {
+        "account_size": 10000.0,
+        "risk_per_trade_pct": 0.5,
+        "max_open_positions": 6,
     },
     "sources": {
         "fmp_enabled": False,
@@ -40,10 +48,10 @@ DEFAULT_CONFIG = {
     },
     "intraday_filter": {
         "enabled": True,
-        "min_atr_pct": 0.35,
-        "max_distance_from_ema20_pct": 1.2,
-        "max_distance_from_vwap_pct": 1.0,
-        "max_trigger_bar_range_atr": 0.8,
+        "min_atr_pct": 0.25,
+        "max_distance_from_ema20_pct": 1.8,
+        "max_distance_from_vwap_pct": 1.5,
+        "max_trigger_bar_range_atr": 1.1,
         "us_session": {"start_utc": "13:35", "end_utc": "20:00"},
         "forex_session": {"start_utc": "06:00", "end_utc": "20:00"},
         "crypto_session": {"start_utc": "00:00", "end_utc": "23:59"},
@@ -260,62 +268,62 @@ def try_etoro_recommendations(cfg: Dict) -> List[str]:
         return []
 
 
-def get_dynamic_market_movers(symbols: List[str], top_n: int = 12) -> Dict[str, List[str]]:
-    """
-    Reconstruye una versión dinámica de "destacados" a partir de movimiento diario
-    y actividad reciente. Evita depender de una lista estática.
-    """
-    rows = []
-    seen = set()
 
-    for symbol in symbols:
-        if not symbol or symbol in seen:
-            continue
-        seen.add(symbol)
 
+def safe_last(df: Optional[pd.DataFrame], column: str) -> Optional[float]:
+    if df is None or df.empty or column not in df.columns:
+        return None
+    val = df.iloc[-1].get(column)
+    if val is None or pd.isna(val):
+        return None
+    return float(val)
+
+
+def quality_label(score: float, rr: float) -> str:
+    if score >= 65 and rr >= 1.5:
+        return "ALTA"
+    if score >= 60 and rr >= 1.3:
+        return "MEDIA"
+    return "BAJA"
+
+
+def compute_position_size(entry: float, stop: float, account_size: float, risk_pct: float) -> Tuple[float, float]:
+    risk_amount = max(account_size, 0) * max(risk_pct, 0) / 100.0
+    per_unit_risk = abs(entry - stop)
+    if risk_amount <= 0 or per_unit_risk <= 0:
+        return 0.0, risk_amount
+    units = risk_amount / per_unit_risk
+    return float(units), float(risk_amount)
+
+
+def get_dynamic_movers(base_symbols: List[str]) -> Dict[str, List[str]]:
+    scored = []
+    for symbol in list(dict.fromkeys(base_symbols)):
         try:
-            df = download_ohlcv(symbol, "1d", "15d")
-            if df is None or len(df) < 6:
+            df = download_ohlcv(symbol, "1d", "3mo")
+            if df is None or len(df) < 25:
                 continue
-
-            close = pd.to_numeric(df["Close"], errors="coerce")
-            vol = pd.to_numeric(df["Volume"], errors="coerce").fillna(0)
-
-            if close.isna().all():
-                continue
-
-            daily_change_pct = float((close.iloc[-1] / close.iloc[-2] - 1.0) * 100.0) if len(close) >= 2 else 0.0
-            weekly_change_pct = float((close.iloc[-1] / close.iloc[-6] - 1.0) * 100.0) if len(close) >= 6 else daily_change_pct
-
-            vol_ma5 = float(vol.tail(6).head(5).mean()) if len(vol) >= 6 else float(vol.mean())
-            rel_vol = float(vol.iloc[-1] / vol_ma5) if vol_ma5 and not math.isnan(vol_ma5) else 1.0
-
-            move_score = abs(daily_change_pct) + 0.35 * abs(weekly_change_pct) + max(0.0, rel_vol - 1.0) * 4.0
-            rows.append({
+            edf = df.copy()
+            edf["vol_ma20"] = edf["Volume"].rolling(20).mean().replace(0, math.nan)
+            edf["rel_vol"] = (edf["Volume"] / edf["vol_ma20"]).replace([math.inf, -math.inf], math.nan).fillna(1.0)
+            day_change = float((edf["Close"].iloc[-1] / edf["Close"].iloc[-2] - 1) * 100) if len(edf) >= 2 else 0.0
+            week_change = float((edf["Close"].iloc[-1] / edf["Close"].iloc[-6] - 1) * 100) if len(edf) >= 6 else day_change
+            rel_vol = float(edf["rel_vol"].iloc[-1]) if not pd.isna(edf["rel_vol"].iloc[-1]) else 1.0
+            move_score = abs(day_change) * 0.65 + abs(week_change) * 0.25 + max(rel_vol - 1.0, 0) * 3.5
+            scored.append({
                 "symbol": symbol,
-                "daily_change_pct": daily_change_pct,
-                "weekly_change_pct": weekly_change_pct,
+                "day_change": day_change,
+                "week_change": week_change,
                 "rel_vol": rel_vol,
                 "move_score": move_score,
             })
         except Exception:
             continue
-
-    if not rows:
-        return {"combined": [], "winners": [], "losers": []}
-
-    rdf = pd.DataFrame(rows).sort_values(["move_score", "daily_change_pct"], ascending=[False, False])
-
-    winners = rdf.sort_values(["daily_change_pct", "move_score"], ascending=[False, False])["symbol"].head(top_n).tolist()
-    losers = rdf.sort_values(["daily_change_pct", "move_score"], ascending=[True, False])["symbol"].head(top_n).tolist()
-    combined = rdf["symbol"].head(top_n).tolist()
-
-    return {
-        "combined": list(dict.fromkeys(combined)),
-        "winners": list(dict.fromkeys(winners)),
-        "losers": list(dict.fromkeys(losers)),
-    }
-
+    scored = sorted(scored, key=lambda x: x["move_score"], reverse=True)
+    winners = [x["symbol"] for x in sorted(scored, key=lambda x: x["day_change"], reverse=True)[:5]]
+    losers = [x["symbol"] for x in sorted(scored, key=lambda x: x["day_change"])[:5]]
+    movers = [x["symbol"] for x in scored[:10]]
+    return {"movers": movers, "winners": winners, "losers": losers, "details": scored[:15]}
 
 @dataclass
 class Signal:
@@ -392,28 +400,21 @@ class SignalEngine:
     def extra_symbol_bonus(self, symbol: str) -> Tuple[int, List[str]]:
         score = 0
         reasons = []
-        etoro_weight = self.weights["etoro"]
-
         if symbol in self.featured:
-            score += etoro_weight
-            reasons.append("activo aparece en destacados eToro estáticos")
-
-        if symbol in self.regime.get("dynamic_movers", []):
-            score += etoro_weight + 3
-            reasons.append("activo aparece en movers dinámicos actuales")
-
-        if symbol in self.regime.get("dynamic_winners", []):
-            score += 2
-            reasons.append("activo en top ganadores dinámicos")
-
-        if symbol in self.regime.get("dynamic_losers", []):
-            score += 2
-            reasons.append("activo en top perdedores dinámicos")
-
+            score += self.weights["etoro"]
+            reasons.append("activo aparece en destacados eToro")
         if symbol in self.regime.get("etoro_recommendations", []):
-            score += etoro_weight
+            score += self.weights["etoro"]
             reasons.append("activo aparece en recomendaciones eToro")
-
+        if symbol in self.regime.get("dynamic_movers", []):
+            score += self.weights["etoro"]
+            reasons.append("activo aparece en movers dinámicos actuales")
+        if symbol in self.regime.get("dynamic_winners", []):
+            score += max(2, self.weights["etoro"] // 2)
+            reasons.append("activo en top ganadores dinámicos")
+        if symbol in self.regime.get("dynamic_losers", []):
+            score += max(2, self.weights["etoro"] // 2)
+            reasons.append("activo en top perdedores dinámicos")
         return score, reasons
 
     def event_penalty(self, symbol: str) -> Tuple[int, List[str]]:
@@ -434,6 +435,8 @@ class SignalEngine:
         df15 = self.enrich(df15, intraday=True)
         df1h = self.enrich(df1h, intraday=False)
         df4h = self.enrich(df4h, intraday=False)
+        if df15 is None or df1h is None or df4h is None or df15.empty or df1h.empty or df4h.empty:
+            return []
         if len(df15) < 220 or len(df1h) < 220 or len(df4h) < 120:
             return []
         row15 = df15.iloc[-1]
@@ -541,6 +544,8 @@ class SignalEngine:
     def evaluate_swing(self, symbol: str, dfd: pd.DataFrame, df4h: pd.DataFrame) -> List[Signal]:
         dfd = self.enrich(dfd, intraday=False)
         df4h = self.enrich(df4h, intraday=False)
+        if dfd is None or df4h is None or dfd.empty or df4h.empty:
+            return []
         if len(dfd) < 220 or len(df4h) < 120:
             return []
         rowd = dfd.iloc[-1]
@@ -593,6 +598,68 @@ class SignalEngine:
             if candidate:
                 results.append(Signal(symbol, "swing 1-8 semanas", side, "4h/1d", float(rowd["Close"]), entry, float(stop), float(target), float(rr), int(score), float(score), reasons, not actionable, datetime.now(timezone.utc).isoformat()))
         return results
+
+
+
+class TradeTracker:
+    def __init__(self, config: Dict):
+        self.path = "trade_tracking.csv"
+        self.summary_path = "performance_summary.json"
+        self.account_size = float(config.get("risk_management", {}).get("account_size", 10000.0))
+        self.risk_per_trade_pct = float(config.get("risk_management", {}).get("risk_per_trade_pct", 0.5))
+        if not os.path.exists(self.path):
+            cols = [
+                "timestamp_utc", "symbol", "strategy", "side", "timeframe", "quality",
+                "score", "risk_reward", "price", "entry", "stop", "target",
+                "position_units", "risk_amount", "candidate_only"
+            ]
+            pd.DataFrame(columns=cols).to_csv(self.path, index=False)
+
+    def log_signal(self, sig: Signal):
+        quality = quality_label(sig.score, sig.risk_reward)
+        units, risk_amount = compute_position_size(sig.entry, sig.stop, self.account_size, self.risk_per_trade_pct)
+        row = {
+            "timestamp_utc": sig.timestamp_utc,
+            "symbol": sig.symbol,
+            "strategy": sig.strategy,
+            "side": sig.side,
+            "timeframe": sig.timeframe,
+            "quality": quality,
+            "score": sig.score,
+            "risk_reward": sig.risk_reward,
+            "price": sig.price,
+            "entry": sig.entry,
+            "stop": sig.stop,
+            "target": sig.target,
+            "position_units": units,
+            "risk_amount": risk_amount,
+            "candidate_only": sig.candidate_only,
+        }
+        pd.DataFrame([row]).to_csv(self.path, mode="a", index=False, header=False)
+
+    def build_summary(self) -> Dict[str, Any]:
+        if not os.path.exists(self.path):
+            summary = {"rows": 0, "quality_counts": {}, "avg_score": 0.0, "avg_rr": 0.0}
+            with open(self.summary_path, "w", encoding="utf-8") as f:
+                json.dump(summary, f, ensure_ascii=False, indent=2)
+            return summary
+        try:
+            df = pd.read_csv(self.path)
+            if df.empty:
+                summary = {"rows": 0, "quality_counts": {}, "avg_score": 0.0, "avg_rr": 0.0}
+            else:
+                summary = {
+                    "rows": int(len(df)),
+                    "quality_counts": df["quality"].value_counts().to_dict() if "quality" in df.columns else {},
+                    "avg_score": round(float(df["score"].mean()), 2) if "score" in df.columns else 0.0,
+                    "avg_rr": round(float(df["risk_reward"].mean()), 2) if "risk_reward" in df.columns else 0.0,
+                    "last_timestamp_utc": df["timestamp_utc"].iloc[-1] if "timestamp_utc" in df.columns else None,
+                }
+            with open(self.summary_path, "w", encoding="utf-8") as f:
+                json.dump(summary, f, ensure_ascii=False, indent=2)
+            return summary
+        except Exception:
+            return {"rows": 0, "quality_counts": {}, "avg_score": 0.0, "avg_rr": 0.0}
 
 
 class AlertManager:
@@ -660,14 +727,18 @@ class AlertManager:
     @staticmethod
     def format_signal(sig: Signal) -> str:
         header = "🟡 CANDIDATA" if sig.candidate_only else "🚨 SEÑAL"
+        quality = quality_label(sig.score, sig.risk_reward)
+        units, risk_amount = compute_position_size(sig.entry, sig.stop, 10000.0, 0.5)
         return (
             f"{header} {sig.side} | {sig.symbol} | {sig.strategy} | TF {sig.timeframe}\n"
+            f"Calidad: {quality}\n"
             f"Precio: {sig.price:.4f}\n"
             f"Entrada: {sig.entry:.4f}\n"
             f"Stop: {sig.stop:.4f}\n"
             f"Objetivo: {sig.target:.4f}\n"
             f"R/R: {sig.risk_reward:.2f}\n"
             f"Confianza: {sig.confidence}/100\n"
+            f"Tamaño teórico: {units:.2f} unidades | Riesgo ref.: {risk_amount:.2f}\n"
             f"Motivos: {'; '.join(sig.reasons[:8])}\n"
             f"UTC: {sig.timestamp_utc}"
         )
@@ -684,6 +755,9 @@ class AlertManager:
         ]
         if summary.get("featured_context"):
             lines.append(f"Destacados eToro: {summary['featured_context']}")
+        perf = summary.get("tracking_summary", {})
+        if perf:
+            lines.append(f"Tracking: filas={perf.get('rows', 0)} | score medio={perf.get('avg_score', 0):.2f} | RR medio={perf.get('avg_rr', 0):.2f}")
         if candidates:
             lines.append("Top oportunidades no confirmadas:")
             for c in candidates[:5]:
@@ -695,18 +769,12 @@ class Scanner:
     def __init__(self, config: Dict):
         self.config = config
         self.alerts = AlertManager(config)
+        self.tracker = TradeTracker(config)
         self.regime = self.build_regime()
         self.engine = SignalEngine(config, self.regime)
 
     def build_regime(self) -> Dict:
-        regime = {
-            "tag": "mixed",
-            "market_bias": "neutral",
-            "etoro_recommendations": [],
-            "dynamic_movers": [],
-            "dynamic_winners": [],
-            "dynamic_losers": [],
-        }
+        regime = {"tag": "mixed", "market_bias": "neutral", "etoro_recommendations": []}
         spy = download_ohlcv("SPY", "1d", "1y")
         qqq = download_ohlcv("QQQ", "1d", "1y")
         gld = download_ohlcv("GLD", "1d", "1y")
@@ -736,19 +804,17 @@ class Scanner:
         if gld is not None and len(gld) >= 200:
             regime["gld_trend"] = "up" if gld["Close"].iloc[-1] > ema(gld["Close"], 50).iloc[-1] else "down"
         regime["etoro_recommendations"] = try_etoro_recommendations(self.config)
-
-        dynamic_universe = list(dict.fromkeys(
+        mover_universe = (
             self.config["watchlists"].get("intraday", []) +
             self.config["watchlists"].get("swing", []) +
             self.config["watchlists"].get("etoro_featured_winners", []) +
-            self.config["watchlists"].get("etoro_featured_losers", []) +
-            regime["etoro_recommendations"]
-        ))
-        movers = get_dynamic_market_movers(dynamic_universe, top_n=12)
-        regime["dynamic_movers"] = movers.get("combined", [])
-        regime["dynamic_winners"] = movers.get("winners", [])
-        regime["dynamic_losers"] = movers.get("losers", [])
-
+            self.config["watchlists"].get("etoro_featured_losers", [])
+        )
+        dm = get_dynamic_movers(mover_universe)
+        regime["dynamic_movers"] = dm.get("movers", [])
+        regime["dynamic_winners"] = dm.get("winners", [])
+        regime["dynamic_losers"] = dm.get("losers", [])
+        regime["dynamic_mover_details"] = dm.get("details", [])
         return regime
 
     def analyze_symbol_intraday(self, symbol: str) -> List[Signal]:
@@ -782,24 +848,25 @@ class Scanner:
     def scan_once(self):
         actionable: List[Signal] = []
         candidates: List[Signal] = []
+        all_signals: List[Signal] = []
         scanned = 0
-        intraday_atr_pcts = []
+        intraday_atr_pcts: List[float] = []
         universe_intraday = list(dict.fromkeys(
-            self.config["watchlists"].get("intraday", []) +
-            self.config["watchlists"].get("etoro_featured_winners", []) +
-            self.config["watchlists"].get("etoro_featured_losers", []) +
-            self.regime.get("etoro_recommendations", []) +
-            self.regime.get("dynamic_movers", []) +
-            self.regime.get("dynamic_winners", []) +
-            self.regime.get("dynamic_losers", [])
+            self.config["watchlists"].get("intraday", [])
+            + self.config["watchlists"].get("etoro_featured_winners", [])
+            + self.config["watchlists"].get("etoro_featured_losers", [])
+            + self.regime.get("etoro_recommendations", [])
+            + self.regime.get("dynamic_movers", [])
+            + self.regime.get("dynamic_winners", [])
+            + self.regime.get("dynamic_losers", [])
         ))
         universe_swing = list(dict.fromkeys(
-            self.config["watchlists"].get("swing", []) +
-            self.config["watchlists"].get("etoro_featured_winners", []) +
-            self.config["watchlists"].get("etoro_featured_losers", []) +
-            self.regime.get("dynamic_movers", []) +
-            self.regime.get("dynamic_winners", []) +
-            self.regime.get("dynamic_losers", [])
+            self.config["watchlists"].get("swing", [])
+            + self.config["watchlists"].get("etoro_featured_winners", [])
+            + self.config["watchlists"].get("etoro_featured_losers", [])
+            + self.regime.get("dynamic_movers", [])
+            + self.regime.get("dynamic_winners", [])
+            + self.regime.get("dynamic_losers", [])
         ))
 
         seen = set()
@@ -811,6 +878,8 @@ class Scanner:
             try:
                 sigs = self.analyze_symbol_intraday(symbol)
                 for s in sigs:
+                    all_signals.append(s)
+                    self.tracker.log_signal(s)
                     if s.candidate_only:
                         candidates.append(s)
                     else:
@@ -818,9 +887,12 @@ class Scanner:
                 df15 = download_ohlcv(symbol, "15m", "5d")
                 if df15 is not None and len(df15) > 30:
                     edf = self.engine.enrich(df15, intraday=True)
-                    intraday_atr_pcts.append(float(edf.iloc[-1]["atr_pct"]))
+                    val = safe_last(edf, "atr_pct")
+                    if val is not None:
+                        intraday_atr_pcts.append(val)
             except Exception:
                 traceback.print_exc()
+
         for symbol in universe_swing:
             if symbol in seen:
                 continue
@@ -829,6 +901,8 @@ class Scanner:
             try:
                 sigs = self.analyze_symbol_swing(symbol)
                 for s in sigs:
+                    all_signals.append(s)
+                    self.tracker.log_signal(s)
                     if s.candidate_only:
                         candidates.append(s)
                     else:
@@ -836,15 +910,35 @@ class Scanner:
             except Exception:
                 traceback.print_exc()
 
+        all_signals.sort(key=lambda s: (s.score, s.risk_reward, 0 if s.candidate_only else 1), reverse=True)
         actionable.sort(key=lambda s: (s.score, s.risk_reward), reverse=True)
         candidates.sort(key=lambda s: (s.score, s.risk_reward), reverse=True)
 
         sent = 0
-        for sig in actionable[:12]:
-            if self.alerts.should_send(sig):
-                self.alerts.send(sig)
-                sent += 1
+        for sig in actionable[:10]:
+            if sig.confidence >= self.config["min_confidence"] and sig.risk_reward >= self.config["risk_reward_min"]:
+                if self.alerts.should_send(sig):
+                    self.alerts.send(sig)
+                    sent += 1
 
+        if self.config.get("always_send_top_opportunities", True):
+            top_intraday = [s for s in all_signals if "intradía" in s.strategy][: self.config.get("top_intraday_to_send", 3)]
+            top_swing = [s for s in all_signals if "swing" in s.strategy][: self.config.get("top_swing_to_send", 3)]
+            if top_intraday or top_swing:
+                msg = "🔥 TOP OPORTUNIDADES ACTUALES\n\n"
+                if top_intraday:
+                    msg += "📊 INTRADÍA:\n"
+                    for i, s in enumerate(top_intraday, 1):
+                        msg += f"{i}. {s.symbol} {s.side} | score {int(s.score)} | RR {s.risk_reward:.2f} | calidad {quality_label(s.score, s.risk_reward)}\n"
+                if top_swing:
+                    msg += "\n📈 SWING:\n"
+                    for i, s in enumerate(top_swing, 1):
+                        msg += f"{i}. {s.symbol} {s.side} | score {int(s.score)} | RR {s.risk_reward:.2f} | calidad {quality_label(s.score, s.risk_reward)}\n"
+                print(msg)
+                self.alerts._send_telegram(msg)
+
+        tracking_summary = self.tracker.build_summary()
+        dm_text = ",".join(self.regime.get("dynamic_movers", [])[:5])
         summary = {
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "regime_tag": self.regime.get("tag"),
@@ -853,10 +947,11 @@ class Scanner:
             "scanned_symbols": scanned,
             "signals_sent": sent,
             "candidate_count": len(candidates),
+            "all_signal_count": len(all_signals),
             "featured_context": (
-                f"estáticos_ganadores={','.join(self.config['watchlists'].get('etoro_featured_winners', [])[:4])} | "
-                f"estáticos_perdedores={','.join(self.config['watchlists'].get('etoro_featured_losers', [])[:4])} | "
-                f"dinámicos={','.join(self.regime.get('dynamic_movers', [])[:6])}"
+                f"ganadores={','.join(self.config['watchlists'].get('etoro_featured_winners', [])[:5])} | "
+                f"perdedores={','.join(self.config['watchlists'].get('etoro_featured_losers', [])[:5])} | "
+                f"dinámicos={dm_text}"
             ),
             "top_candidates": [
                 {
@@ -864,16 +959,18 @@ class Scanner:
                     "side": c.side,
                     "score": c.score,
                     "risk_reward": c.risk_reward,
-                } for c in candidates[: self.config.get("top_candidates_in_heartbeat", 5)]
+                    "quality": quality_label(c.score, c.risk_reward),
+                } for c in all_signals[: self.config.get("top_candidates_in_heartbeat", 5)]
             ],
+            "tracking_summary": tracking_summary,
         }
         self.alerts.save_summary(summary)
         self.alerts.maybe_send_heartbeat(summary)
 
-        if sent == 0:
-            print(f"{datetime.now().isoformat()} | Escaneo completado sin señales operables nuevas. Candidatas: {len(candidates)}")
-        else:
-            print(f"{datetime.now().isoformat()} | Escaneo completado. Señales enviadas: {sent}. Candidatas: {len(candidates)}")
+        print(
+            f"{datetime.now().isoformat()} | Señales: {sent} | "
+            f"Total oportunidades: {len(all_signals)} | Candidatas: {len(candidates)}"
+        )
 
     def run_forever(self):
         interval = int(self.config["scan_interval_seconds"])
