@@ -710,7 +710,10 @@ class Scanner:
                 df15 = download_ohlcv(symbol, "15m", "5d")
                 if df15 is not None and len(df15) > 30:
                     edf = self.engine.enrich(df15, intraday=True)
-                    intraday_atr_pcts.append(float(edf.iloc[-1]["atr_pct"]))
+                   if edf is not None and not edf.empty and "atr_pct" in edf.columns:
+    last_atr_pct = edf.iloc[-1].get("atr_pct", None)
+    if last_atr_pct is not None and pd.notna(last_atr_pct):
+        intraday_atr_pcts.append(float(last_atr_pct))
             except Exception:
                 traceback.print_exc()
         for symbol in universe_swing:
