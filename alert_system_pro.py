@@ -16,8 +16,8 @@ import yfinance as yf
 DEFAULT_CONFIG = {
     "scan_interval_seconds": 300,
     "cooldown_minutes": 60,
-    "min_confidence": 70,
-    "risk_reward_min": 2.0,
+    "min_confidence": 64,
+    "risk_reward_min": 1.7,
     "top_candidates_in_heartbeat": 5,
     "heartbeat": {
         "enabled": True,
@@ -40,10 +40,10 @@ DEFAULT_CONFIG = {
     },
     "intraday_filter": {
         "enabled": True,
-        "min_atr_pct": 0.35,
-        "max_distance_from_ema20_pct": 1.2,
-        "max_distance_from_vwap_pct": 1.0,
-        "max_trigger_bar_range_atr": 0.8,
+        "min_atr_pct": 0.25,
+        "max_distance_from_ema20_pct": 1.8,
+        "max_distance_from_vwap_pct": 1.5,
+        "max_trigger_bar_range_atr": 1.1,
         "us_session": {"start_utc": "13:35", "end_utc": "20:00"},
         "forex_session": {"start_utc": "06:00", "end_utc": "20:00"},
         "crypto_session": {"start_utc": "00:00", "end_utc": "23:59"},
@@ -361,10 +361,6 @@ class SignalEngine:
         df15 = self.enrich(df15, intraday=True)
         df1h = self.enrich(df1h, intraday=False)
         df4h = self.enrich(df4h, intraday=False)
-        if df15 is None or df1h is None or df4h is None:
-            return []
-        if df15.empty or df1h.empty or df4h.empty:
-            return []
         if len(df15) < 220 or len(df1h) < 220 or len(df4h) < 120:
             return []
         row15 = df15.iloc[-1]
@@ -472,10 +468,6 @@ class SignalEngine:
     def evaluate_swing(self, symbol: str, dfd: pd.DataFrame, df4h: pd.DataFrame) -> List[Signal]:
         dfd = self.enrich(dfd, intraday=False)
         df4h = self.enrich(df4h, intraday=False)
-        if dfd is None or df4h is None:
-            return []
-        if dfd.empty or df4h.empty:
-            return []
         if len(dfd) < 220 or len(df4h) < 120:
             return []
         rowd = dfd.iloc[-1]
@@ -718,10 +710,7 @@ class Scanner:
                 df15 = download_ohlcv(symbol, "15m", "5d")
                 if df15 is not None and len(df15) > 30:
                     edf = self.engine.enrich(df15, intraday=True)
-                    if edf is not None and not edf.empty and "atr_pct" in edf.columns:
-                        last_atr_pct = edf.iloc[-1].get("atr_pct", None)
-                        if last_atr_pct is not None and pd.notna(last_atr_pct):
-                            intraday_atr_pcts.append(float(last_atr_pct))
+                    intraday_atr_pcts.append(float(edf.iloc[-1]["atr_pct"]))
             except Exception:
                 traceback.print_exc()
         for symbol in universe_swing:
