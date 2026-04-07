@@ -16,8 +16,8 @@ import yfinance as yf
 DEFAULT_CONFIG = {
     "scan_interval_seconds": 300,
     "cooldown_minutes": 60,
-    "min_confidence": 64,
-    "risk_reward_min": 1.7,
+    "min_confidence": 62,
+    "risk_reward_min": 1.6,
     "top_candidates_in_heartbeat": 5,
     "heartbeat": {
         "enabled": True,
@@ -40,10 +40,10 @@ DEFAULT_CONFIG = {
     },
     "intraday_filter": {
         "enabled": True,
-        "min_atr_pct": 0.25,
-        "max_distance_from_ema20_pct": 1.8,
-        "max_distance_from_vwap_pct": 1.5,
-        "max_trigger_bar_range_atr": 1.1,
+        "min_atr_pct": 0.22,
+        "max_distance_from_ema20_pct": 2.2,
+        "max_distance_from_vwap_pct": 1.8,
+        "max_trigger_bar_range_atr": 1.25,
         "us_session": {"start_utc": "13:35", "end_utc": "20:00"},
         "forex_session": {"start_utc": "06:00", "end_utc": "20:00"},
         "crypto_session": {"start_utc": "00:00", "end_utc": "23:59"},
@@ -321,16 +321,32 @@ class SignalEngine:
     def market_bias_score(self, side: str) -> Tuple[int, List[str]]:
         score = 0
         reasons = []
-        if self.regime.get("tag") == "risk_on" and side == "LONG":
+        tag = self.regime.get("tag")
+        if tag == "risk_on" and side == "LONG":
             score += self.weights["regime"]
             reasons.append("régimen risk-on acompaña")
-        elif self.regime.get("tag") == "risk_off" and side == "SHORT":
+        elif tag == "risk_off" and side == "SHORT":
             score += self.weights["regime"]
             reasons.append("régimen risk-off acompaña")
-        elif self.regime.get("tag") == "mixed":
-            score += self.weights["regime"] // 2
-            reasons.append("régimen mixto: reducir exigencia táctica")
+        elif tag == "mixed":
+            score += int(self.weights["regime"] * 0.6)
+            reasons.append("régimen mixto: priorizar táctica y reversión")
+        else:
+            score += int(self.weights["regime"] * 0.25)
         return score, reasons
+
+    def classify_intraday_regime(self, row15: pd.Series, row1h: pd.Series, row4h: pd.Series) -> str:
+        aligned_up = row4h["ema20"] > row4h["ema50"] and row1h["ema20"] > row1h["ema50"]
+        aligned_down = row4h["ema20"] < row4h["ema50"] and row1h["ema20"] < row1h["ema50"]
+        compressed = float(row15.get("atr_pct", 0)) < max(self.config["intraday_filter"]["min_atr_pct"] * 1.35, 0.35)
+        flat_1h = abs((row1h["ema20"] - row1h["ema50"]) / max(abs(row1h["ema50"]), 1e-9) * 100) < 0.35
+        if aligned_up:
+            return "trend_up"
+        if aligned_down:
+            return "trend_down"
+        if compressed or flat_1h or self.regime.get("tag") == "mixed":
+            return "range"
+        return "mixed"
 
     def extra_symbol_bonus(self, symbol: str) -> Tuple[int, List[str]]:
         score = 0
@@ -361,15 +377,20 @@ class SignalEngine:
         df15 = self.enrich(df15, intraday=True)
         df1h = self.enrich(df1h, intraday=False)
         df4h = self.enrich(df4h, intraday=False)
+        if df15 is None or df1h is None or df4h is None:
+            return []
         if len(df15) < 220 or len(df1h) < 220 or len(df4h) < 120:
             return []
+
         row15 = df15.iloc[-1]
         prev15 = df15.iloc[-2]
         row1h = df1h.iloc[-1]
         row4h = df4h.iloc[-1]
         cfgf = self.config["intraday_filter"]
         results = []
+        intraday_regime = self.classify_intraday_regime(row15, row1h, row4h)
 
+        # ---------- Setup 1: Continuación / breakout ----------
         for side in ["LONG", "SHORT"]:
             score = 0
             reasons: List[str] = []
@@ -377,7 +398,6 @@ class SignalEngine:
             score += regime_score
             reasons += regime_reasons
 
-            # trend multi-timeframe
             if side == "LONG":
                 if row4h["ema20"] > row4h["ema50"] and row1h["ema20"] > row1h["ema50"]:
                     score += self.weights["trend"]
@@ -385,16 +405,16 @@ class SignalEngine:
                 if row15["Close"] > row15["ema20"] and row15["Close"] > row15["vwap"]:
                     score += self.weights["setup"] // 2
                     reasons.append("precio 15m sobre EMA20 y VWAP")
-                if row15["rsi14"] > prev15["rsi14"] and 50 <= row15["rsi14"] <= 70:
+                if row15["rsi14"] > prev15["rsi14"] and 48 <= row15["rsi14"] <= 72:
                     score += self.weights["momentum"]
                     reasons.append("RSI 15m mejora en zona útil")
                 if row15["macd_hist"] > prev15["macd_hist"]:
                     score += self.weights["momentum"] // 2
                     reasons.append("MACD 15m acelera")
-                entry = float(prev15["High"] * 1.0005)
+                entry = float(max(row15["Close"], prev15["High"] * 1.0004))
                 struct_stop = float(df15["Low"].tail(3).min())
-                stop = min(struct_stop, float(entry - 1.6 * row15["atr14"]))
-                target = float(entry + 2.4 * (entry - stop))
+                stop = min(struct_stop, float(entry - 1.45 * row15["atr14"]))
+                target = float(entry + 2.1 * (entry - stop))
                 candle_close_quality = (row15["Close"] - row15["Low"]) / max((row15["High"] - row15["Low"]), 1e-9)
             else:
                 if row4h["ema20"] < row4h["ema50"] and row1h["ema20"] < row1h["ema50"]:
@@ -403,38 +423,41 @@ class SignalEngine:
                 if row15["Close"] < row15["ema20"] and row15["Close"] < row15["vwap"]:
                     score += self.weights["setup"] // 2
                     reasons.append("precio 15m bajo EMA20 y VWAP")
-                if row15["rsi14"] < prev15["rsi14"] and 30 <= row15["rsi14"] <= 50:
+                if row15["rsi14"] < prev15["rsi14"] and 28 <= row15["rsi14"] <= 52:
                     score += self.weights["momentum"]
                     reasons.append("RSI 15m debilita en zona útil")
                 if row15["macd_hist"] < prev15["macd_hist"]:
                     score += self.weights["momentum"] // 2
                     reasons.append("MACD 15m cae")
-                entry = float(prev15["Low"] * 0.9995)
+                entry = float(min(row15["Close"], prev15["Low"] * 0.9996))
                 struct_stop = float(df15["High"].tail(3).max())
-                stop = max(struct_stop, float(entry + 1.6 * row15["atr14"]))
-                target = float(entry - 2.4 * (stop - entry))
+                stop = max(struct_stop, float(entry + 1.45 * row15["atr14"]))
+                target = float(entry - 2.1 * (stop - entry))
                 candle_close_quality = (row15["High"] - row15["Close"]) / max((row15["High"] - row15["Low"]), 1e-9)
 
-            # liquidity/volatility filters
             if row15["atr_pct"] >= cfgf["min_atr_pct"]:
                 score += self.weights["liquidity"] // 2
                 reasons.append(f"ATR% suficiente ({row15['atr_pct']:.2f}%)")
-            if row15["rel_vol"] >= 1.2:
+            if row15["rel_vol"] >= 1.05:
                 score += self.weights["liquidity"] // 2
                 reasons.append(f"volumen relativo {row15['rel_vol']:.2f}x")
 
             dist_ema20 = abs((row15["Close"] - row15["ema20"]) / row15["ema20"] * 100)
             dist_vwap = abs((row15["Close"] - row15["vwap"]) / row15["vwap"] * 100)
             too_extended = dist_ema20 > cfgf["max_distance_from_ema20_pct"] or dist_vwap > cfgf["max_distance_from_vwap_pct"]
+
             if not too_extended:
                 score += self.weights["space"] // 2
                 reasons.append("precio no está extendido")
             if row15["bar_range"] <= row15["atr_pct"] * cfgf["max_trigger_bar_range_atr"]:
                 score += self.weights["space"] // 2
-                reasons.append("vela gatillo no está excesivamente larga")
-            if candle_close_quality >= 0.65:
+                reasons.append("vela gatillo razonable")
+            if candle_close_quality >= 0.58:
                 score += self.weights["setup"] // 2
                 reasons.append("cierre fuerte en la vela gatillo")
+            if intraday_regime.startswith("trend"):
+                score += 5
+                reasons.append("régimen intradía favorece continuación")
 
             event_score, event_reasons = self.event_penalty(symbol)
             score += event_score
@@ -444,12 +467,12 @@ class SignalEngine:
             reasons += extra_reasons
 
             rr = ((target - entry) / max(entry - stop, 1e-9)) if side == "LONG" else ((entry - target) / max(stop - entry, 1e-9))
-            candidate = score >= max(55, self.min_confidence - 10) and rr >= 1.4
+            candidate = score >= max(52, self.min_confidence - 10) and rr >= 1.35
             actionable = score >= self.min_confidence and rr >= self.rr_min and not too_extended
             if candidate:
                 results.append(Signal(
                     symbol=symbol,
-                    strategy="continuación intradía avanzada",
+                    strategy="continuación intradía v3",
                     side=side,
                     timeframe="15m/1h/4h",
                     price=float(row15["Close"]),
@@ -463,7 +486,107 @@ class SignalEngine:
                     candidate_only=not actionable,
                     timestamp_utc=datetime.now(timezone.utc).isoformat(),
                 ))
-        return results
+
+        # ---------- Setup 2: Reversión intradía / mean reversion ----------
+        if intraday_regime in {"range", "mixed"}:
+            for side in ["LONG", "SHORT"]:
+                score = 0
+                reasons: List[str] = []
+                regime_score, regime_reasons = self.market_bias_score(side)
+                score += int(regime_score * 0.75)
+                reasons += regime_reasons
+
+                dist_vwap_signed = float((row15["Close"] - row15["vwap"]) / max(row15["vwap"], 1e-9) * 100)
+                dist_ema_signed = float((row15["Close"] - row15["ema20"]) / max(row15["ema20"], 1e-9) * 100)
+                trigger_quality = (row15["Close"] - row15["Low"]) / max((row15["High"] - row15["Low"]), 1e-9)
+                short_trigger_quality = (row15["High"] - row15["Close"]) / max((row15["High"] - row15["Low"]), 1e-9)
+
+                if side == "LONG":
+                    if row15["rsi14"] <= 42:
+                        score += self.weights["momentum"]
+                        reasons.append("RSI bajo para reversión")
+                    if dist_vwap_signed <= -0.35 and dist_ema_signed <= -0.20:
+                        score += self.weights["setup"]
+                        reasons.append("precio extendido por debajo de VWAP/EMA20")
+                    if row15["Close"] > prev15["Close"] and row15["macd_hist"] >= prev15["macd_hist"]:
+                        score += self.weights["momentum"] // 2
+                        reasons.append("impulso bajista pierde fuerza")
+                    if trigger_quality >= 0.62:
+                        score += self.weights["setup"] // 2
+                        reasons.append("vela de rechazo alcista")
+                    if row15["rel_vol"] >= 0.95:
+                        score += self.weights["liquidity"] // 2
+                        reasons.append("volumen acompaña la reacción")
+
+                    entry = float(max(row15["Close"], prev15["High"] * 1.0002))
+                    stop = float(min(df15["Low"].tail(4).min(), entry - 1.15 * row15["atr14"]))
+                    target = float(min(row15["vwap"], entry + 1.75 * (entry - stop)))
+                else:
+                    if row15["rsi14"] >= 58:
+                        score += self.weights["momentum"]
+                        reasons.append("RSI alto para reversión")
+                    if dist_vwap_signed >= 0.35 and dist_ema_signed >= 0.20:
+                        score += self.weights["setup"]
+                        reasons.append("precio extendido por encima de VWAP/EMA20")
+                    if row15["Close"] < prev15["Close"] and row15["macd_hist"] <= prev15["macd_hist"]:
+                        score += self.weights["momentum"] // 2
+                        reasons.append("impulso alcista pierde fuerza")
+                    if short_trigger_quality >= 0.62:
+                        score += self.weights["setup"] // 2
+                        reasons.append("vela de rechazo bajista")
+                    if row15["rel_vol"] >= 0.95:
+                        score += self.weights["liquidity"] // 2
+                        reasons.append("volumen acompaña la reacción")
+
+                    entry = float(min(row15["Close"], prev15["Low"] * 0.9998))
+                    stop = float(max(df15["High"].tail(4).max(), entry + 1.15 * row15["atr14"]))
+                    target = float(max(row15["vwap"], entry - 1.75 * (stop - entry)))
+
+                if row15["atr_pct"] >= max(cfgf["min_atr_pct"] * 0.8, 0.18):
+                    score += self.weights["liquidity"] // 2
+                    reasons.append(f"ATR% usable ({row15['atr_pct']:.2f}%)")
+                if row15["bar_range"] <= row15["atr_pct"] * max(cfgf["max_trigger_bar_range_atr"], 1.0):
+                    score += self.weights["space"] // 2
+                    reasons.append("vela no está demasiado extendida")
+                score += 6
+                reasons.append("régimen lateral favorece reversión")
+
+                event_score, event_reasons = self.event_penalty(symbol)
+                score += event_score
+                reasons += event_reasons
+                extra_score, extra_reasons = self.extra_symbol_bonus(symbol)
+                score += extra_score
+                reasons += extra_reasons
+
+                rr = ((target - entry) / max(entry - stop, 1e-9)) if side == "LONG" else ((entry - target) / max(stop - entry, 1e-9))
+                candidate = score >= max(48, self.min_confidence - 14) and rr >= 1.20
+                actionable = score >= max(56, self.min_confidence - 4) and rr >= max(1.35, self.rr_min - 0.15)
+                if candidate:
+                    results.append(Signal(
+                        symbol=symbol,
+                        strategy="reversión intradía v3",
+                        side=side,
+                        timeframe="15m/1h/4h",
+                        price=float(row15["Close"]),
+                        entry=entry,
+                        stop=float(stop),
+                        target=float(target),
+                        risk_reward=float(rr),
+                        confidence=int(score),
+                        score=float(score),
+                        reasons=reasons,
+                        candidate_only=not actionable,
+                        timestamp_utc=datetime.now(timezone.utc).isoformat(),
+                    ))
+
+        # deduplicar y ordenar priorizando operables
+        dedup = {}
+        for sig in results:
+            key = (sig.symbol, sig.strategy, sig.side)
+            prev = dedup.get(key)
+            if prev is None or (sig.score, sig.risk_reward, not sig.candidate_only) > (prev.score, prev.risk_reward, not prev.candidate_only):
+                dedup[key] = sig
+        return sorted(dedup.values(), key=lambda s: (not s.candidate_only, s.score, s.risk_reward), reverse=True)
 
     def evaluate_swing(self, symbol: str, dfd: pd.DataFrame, df4h: pd.DataFrame) -> List[Signal]:
         dfd = self.enrich(dfd, intraday=False)
