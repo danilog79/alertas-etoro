@@ -361,6 +361,10 @@ class SignalEngine:
         df15 = self.enrich(df15, intraday=True)
         df1h = self.enrich(df1h, intraday=False)
         df4h = self.enrich(df4h, intraday=False)
+        if df15 is None or df1h is None or df4h is None:
+            return []
+        if df15.empty or df1h.empty or df4h.empty:
+            return []
         if len(df15) < 220 or len(df1h) < 220 or len(df4h) < 120:
             return []
         row15 = df15.iloc[-1]
@@ -468,6 +472,10 @@ class SignalEngine:
     def evaluate_swing(self, symbol: str, dfd: pd.DataFrame, df4h: pd.DataFrame) -> List[Signal]:
         dfd = self.enrich(dfd, intraday=False)
         df4h = self.enrich(df4h, intraday=False)
+        if dfd is None or df4h is None:
+            return []
+        if dfd.empty or df4h.empty:
+            return []
         if len(dfd) < 220 or len(df4h) < 120:
             return []
         rowd = dfd.iloc[-1]
@@ -710,7 +718,10 @@ class Scanner:
                 df15 = download_ohlcv(symbol, "15m", "5d")
                 if df15 is not None and len(df15) > 30:
                     edf = self.engine.enrich(df15, intraday=True)
-                    intraday_atr_pcts.append(float(edf.iloc[-1]["atr_pct"]))
+                    if edf is not None and not edf.empty and "atr_pct" in edf.columns:
+                        last_atr_pct = edf.iloc[-1].get("atr_pct", None)
+                        if last_atr_pct is not None and pd.notna(last_atr_pct):
+                            intraday_atr_pcts.append(float(last_atr_pct))
             except Exception:
                 traceback.print_exc()
         for symbol in universe_swing:
