@@ -1,10 +1,10 @@
-name: Alertas eToro
+name: Alertas eToro PRO
 
 on:
   schedule:
     - cron: "3,13,23,33,43,53 * * * *"
   workflow_dispatch:
-      inputs:
+    inputs:
       trigger_source:
         description: "Origen del disparo"
         required: false
@@ -28,7 +28,7 @@ jobs:
           python-version: "3.11"
 
       - name: Instalar dependencias
-        run: pip install -r requirements_alert_system.txt
+        run: pip install -r requirements_alert_system_pro.txt
 
       - name: Crear config.json
         run: |
@@ -38,6 +38,7 @@ jobs:
             "cooldown_minutes": 60,
             "min_confidence": 70,
             "risk_reward_min": 2.0,
+            "top_candidates_in_heartbeat": 5,
             "telegram": {
               "enabled": true,
               "bot_token": "${{ secrets.TELEGRAM_BOT_TOKEN }}",
@@ -45,51 +46,30 @@ jobs:
             },
             "heartbeat": {
               "enabled": true,
-              "interval_minutes": 60,
-              "send_only_when_no_signals": false
+              "interval_minutes": 60
             },
-            "intraday_filter": {
-              "enabled": true,
-              "min_atr_pct": 0.35,
-              "max_distance_from_ema20_pct": 1.2,
-              "max_distance_from_vwap_pct": 1.0,
-              "max_trigger_candle_atr_multiple": 0.8,
-              "us_session": {"start_utc": "13:35", "end_utc": "20:00"},
-              "forex_session": {"start_utc": "06:00", "end_utc": "20:00"},
-              "crypto_session": {"start_utc": "00:00", "end_utc": "23:59"}
-            },
-            "etoro_featured": {
-              "enabled": true,
-              "winners": ["GLD", "ARKK", "VXUS", "USDJPY=X"],
-              "losers": ["LINK-USD", "ETH-USD", "ADA-USD", "SOL-USD", "XLE"],
-              "score_boost": 10
-            },
-            "watchlists": {
-              "intraday": [
-                "SPY", "QQQ", "DIA", "IWM", "VTI", "GLD", "SLV", "ARKK", "VXUS", "XLE", "XLF", "XLK",
-                "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "NFLX", "AMD", "COIN",
-                "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X",
-                "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "LINK-USD"
-              ],
-              "swing": [
-                "SPY", "QQQ", "DIA", "IWM", "VTI", "GLD", "SLV", "ARKK", "VXUS", "XLE", "XLF", "XLK",
-                "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "NFLX", "AMD", "COIN",
-                "EURUSD=X", "GBPUSD=X", "USDJPY=X", "AUDUSD=X",
-                "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "LINK-USD"
-              ],
-              "position": [
-                "SPY", "QQQ", "DIA", "IWM", "VTI", "GLD", "SLV", "ARKK", "VXUS", "XLE", "XLF", "XLK",
-                "AAPL", "MSFT", "NVDA", "TSLA", "AMZN", "META", "GOOGL", "NFLX", "AMD", "COIN",
-                "BTC-USD", "ETH-USD", "SOL-USD", "ADA-USD", "LINK-USD"
-              ]
-            },
-            "benchmarks": {
-              "us": ["SPY", "QQQ"],
-              "crypto": ["BTC-USD", "ETH-USD"],
-              "forex": ["USDJPY=X", "EURUSD=X"]
+            "sources": {
+              "fmp_enabled": false,
+              "fmp_api_key": "${{ secrets.FMP_API_KEY }}",
+              "fred_enabled": false,
+              "fred_api_key": "${{ secrets.FRED_API_KEY }}",
+              "etoro_enabled": false,
+              "etoro_base_url": "https://api.etoro.com",
+              "etoro_api_key": "${{ secrets.ETORO_API_KEY }}",
+              "etoro_user_key": "${{ secrets.ETORO_USER_KEY }}"
             }
           }
           EOF
 
       - name: Ejecutar scanner
-        run: python alert_system_final_etoro.py --once
+        run: python alert_system_pro.py --once
+
+      - name: Subir artefactos
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: alertas-etoro-pro-artifacts
+          path: |
+            signals_log.csv
+            last_run_summary.json
+          if-no-files-found: ignore
