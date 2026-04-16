@@ -665,27 +665,17 @@ class AlertManager:
         else:
             quality = "BAJA"
         return (
-            f"{header} {sig.side} | {sig.symbol} | {sig.strategy} | TF {sig.timeframe}
-"
-            f"Calidad: {quality}
-"
-            f"Precio: {sig.price:.4f}
-"
-            f"Entrada: {sig.entry:.4f}
-"
-            f"Stop: {sig.stop:.4f}
-"
-            f"Objetivo: {sig.target:.4f}
-"
-            f"R/R: {sig.risk_reward:.2f}
-"
-            f"Confianza: {sig.confidence}/100
-"
-            f"Motivos: {'; '.join(sig.reasons[:8])}
-"
+            f"{header} {sig.side} | {sig.symbol} | {sig.strategy} | TF {sig.timeframe}\n"
+            f"Calidad: {quality}\n"
+            f"Precio: {sig.price:.4f}\n"
+            f"Entrada: {sig.entry:.4f}\n"
+            f"Stop: {sig.stop:.4f}\n"
+            f"Objetivo: {sig.target:.4f}\n"
+            f"R/R: {sig.risk_reward:.2f}\n"
+            f"Confianza: {sig.confidence}/100\n"
+            f"Motivos: {'; '.join(sig.reasons[:8])}\n"
             f"UTC: {sig.timestamp_utc}"
         )
-
     @staticmethod
     def format_heartbeat(summary: Dict) -> str:
         candidates = summary.get("top_candidates", [])
@@ -867,8 +857,7 @@ class Scanner:
                 lines.append("📈 SWING:")
                 for i, s in enumerate(top_swing, 1):
                     lines.append(f"{i}. {s.symbol} {s.side} | score {int(s.score)} | RR {s.risk_reward:.2f}")
-            top_msg = "
-".join(lines)
+            top_msg = "\n".join(lines)
             print(top_msg)
             self.alerts._send_telegram(top_msg)
 
@@ -929,4 +918,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
