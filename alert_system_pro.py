@@ -656,16 +656,7 @@ class AlertManager:
         self.last_heartbeat = now
 
     @staticmethod
-        @staticmethod     def format_signal(sig: Signal) -> str:         if sig.score >= 65 and sig.risk_reward >= 1.5:             quality = "ALTA"         elif sig.score >= 60:             quality = "MEDIA"         else:             quality = "BAJA"          header = "🟡 CANDIDATA" if sig.candidate_only else "🚨 SEÑAL"          return (             f"{header} {sig.side} | {sig.symbol} | {sig.strategy} | TF {sig.timeframe}
-             f"Calidad: {quality}
-             f"Precio: {sig.price:.4f}
-             f"Entrada: {sig.entry:.4f}
-             f"Stop: {sig.stop:.4f}
-             f"Objetivo: {sig.target:.4f}
-             f"R/R: {sig.risk_reward:.2f}
-             f"Confianza: {sig.confidence}/100
-             f"Motivos: {'; '.join(sig.reasons[:8])}
-             f"UTC: {sig.timestamp_utc}"         )
+    def format_signal(sig: Signal) -> str:
         header = "🟡 CANDIDATA" if sig.candidate_only else "🚨 SEÑAL"
         if sig.score >= 65 and sig.risk_reward >= 1.5:
             quality = "ALTA"
@@ -675,23 +666,23 @@ class AlertManager:
             quality = "BAJA"
         return (
             f"{header} {sig.side} | {sig.symbol} | {sig.strategy} | TF {sig.timeframe}
-
+"
             f"Calidad: {quality}
-
+"
             f"Precio: {sig.price:.4f}
-
+"
             f"Entrada: {sig.entry:.4f}
-
+"
             f"Stop: {sig.stop:.4f}
-
+"
             f"Objetivo: {sig.target:.4f}
-
+"
             f"R/R: {sig.risk_reward:.2f}
-
+"
             f"Confianza: {sig.confidence}/100
-
+"
             f"Motivos: {'; '.join(sig.reasons[:8])}
-
+"
             f"UTC: {sig.timestamp_utc}"
         )
 
