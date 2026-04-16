@@ -36,8 +36,8 @@ jobs:
           {
             "scan_interval_seconds": 300,
             "cooldown_minutes": 60,
-            "min_confidence": 70,
-            "risk_reward_min": 2.0,
+            "min_confidence": 52,
+            "risk_reward_min": 1.2,
             "top_candidates_in_heartbeat": 5,
             "telegram": {
               "enabled": true,
